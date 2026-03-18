@@ -1,4 +1,4 @@
-# DB Graph Explorer "
+# DB Graph Explorer
 
 A full-stack interactive database schema visualizer, profiler, and editor.
 Supports **PostgreSQL** and **MySQL** with a live Cytoscape.js graph, data profiling reports, index analysis, and safe schema editing.
