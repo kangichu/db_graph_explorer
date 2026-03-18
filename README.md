@@ -1,7 +1,7 @@
 # DB Graph Explorer — "Google Maps for Database Schema"
 
-A full-stack interactive database schema visualizer and editor.
-Supports **PostgreSQL** and **MySQL** with a live Cytoscape.js graph.
+A full-stack interactive database schema visualizer, profiler, and editor.
+Supports **PostgreSQL** and **MySQL** with a live Cytoscape.js graph, data profiling reports, index analysis, and safe schema editing.
 
 ---
 
@@ -42,26 +42,55 @@ Frontend runs at: http://localhost:5173
 - Fill in host/port/user/password/database
 - Toggle between PostgreSQL and MySQL
 - "Test Connect" verifies credentials before loading
-- "Load Schema" introspects the full schema
+- "Load Schema" fetches full schema once, then all filtering/paging is client-side
 
 ### Graph Visualization
-- Tables = draggable rounded nodes
+- Tables = draggable rounded-rectangle nodes sized by degree
 - Foreign keys = directed edges
-- Color coding:
-  - 🟡 AMBER  = High-degree hub tables (≥70% of max connections)
-  - 🔵 CYAN   = Normal connected tables
-  - 🩵 TEAL   = Low connectivity
-  - ⬛ GRAY   = Isolated (no foreign key relationships)
+- Color coding by connectivity (configurable thresholds via ⚙ gear icon):
+  - 🟡 **Amber** = High-degree hub tables (default ≥20% of max)
+  - 🔵 **Cyan** = Normal connected tables (default ≥8% of max)
+  - 🩵 **Teal** = Low connectivity (1+ connections below normal)
+  - ⬛ **Gray** = Isolated (no foreign key relationships)
+- Click legend items to filter the graph by connectivity category
+- Neighbor context: filtered views show connected neighbor tables with separate pagination
+
+### Table List (Left Panel)
+- Displays **all tables** in the database, sorted alphabetically
+- Content indicator dots: 🟢 green = has data, ○ hollow = empty table
+- Tables visible on the current graph page shown as bright; off-graph tables shown dimmed
+- Click any table to navigate — auto-pages to the correct graph page and focuses the node
 
 ### Search & Focus
-- Search the table list in the left panel
-- Click any table → zooms & centers the graph on it
-- Fades all unrelated nodes
+- Real-time search filter across all tables
+- Click → zooms & centers the graph, highlights neighborhood
 
 ### Neighborhood Exploration
-- 1-hop: show only directly connected tables
+- 1-hop: directly connected tables only
 - 2-hop: extend to 2nd-degree connections
-- All: show entire subgraph
+- All: show entire connected subgraph
+
+### Data Profiling Reports
+- Select any table → click **📊 Generate Report**
+- Report opens in a **new browser tab** with full profiling data
+- Profiles the selected table **+ all directly connected tables**
+- Per-column statistics:
+  - Null %, distinct count, uniqueness %, min/max values, average (numeric)
+  - Top 5 most frequent values with bar charts and skew warnings
+- **Health scoring** (0–100) with severity-coded issues (critical/warning/info)
+- **FK integrity checks** — detects orphaned foreign key references
+- **Actionable recommendations** per table (drop unused columns, add NOT NULL, normalize enums, fix orphans)
+- Printable via built-in Print button
+
+### Index Analysis
+- Automatically introspects **existing indexes** for every profiled table
+- Shows index name, type (B-Tree, Hash, etc.), columns, and PK/UNIQUE/INDEX badges
+- **Recommends missing indexes** based on:
+  - FK columns without indexes (high impact — causes full table scans on JOINs)
+  - High-uniqueness columns (high impact — ideal for lookups)
+  - Low-cardinality columns on large tables (medium impact — speeds up filtered queries)
+- Each recommendation includes: impact level, explanation, and the exact `CREATE INDEX` SQL
+- **One-click index creation** — execute recommended indexes directly from the report with success/failure feedback
 
 ### Schema Editing (SAFE — SQL Preview Required)
 - Add FK: specify from_table.column → to_table.column
@@ -70,27 +99,30 @@ Frontend runs at: http://localhost:5173
 - Never auto-executes
 
 ### Pagination
-- Large schemas: loads 40 tables at a time
-- Pagination controls appear at bottom of graph for navigation
+- Large schemas: loads 40 tables per graph page
+- Neighbor tables paginated separately (20 per page)
+- Pagination controls appear at bottom of graph
 
 ### Graph Controls (bottom-right)
-- +/- Zoom
-- ⊡ Fit all nodes
-- ↺ Re-run layout
+- `+` / `−` Zoom in/out
+- `⊡` Fit all nodes
+- `↺` Re-run cola layout
 
 ---
 
 ## API Endpoints
 
-| Method | Path                           | Description                        |
-|--------|--------------------------------|------------------------------------|
-| POST   | /api/test-connection           | Test DB connectivity               |
-| POST   | /api/schema                    | Full schema introspection          |
-| POST   | /api/schema/partial?limit=&offset= | Paginated schema slice         |
-| POST   | /api/relationship/preview-add  | Generate ADD FK SQL (no execute)   |
-| POST   | /api/relationship/preview-delete | Generate DROP FK SQL (no execute)|
-| POST   | /api/relationship/execute      | Execute pre-approved ALTER TABLE   |
-| GET    | /api/health                    | Health check                       |
+| Method | Path                             | Description                              |
+|--------|----------------------------------|------------------------------------------|
+| POST   | `/api/test-connection`           | Test DB connectivity                     |
+| POST   | `/api/schema`                    | Full schema introspection                |
+| POST   | `/api/schema/partial`            | Paginated schema slice (server-side)     |
+| POST   | `/api/relationship/preview-add`  | Generate ADD FK SQL (no execute)         |
+| POST   | `/api/relationship/preview-delete` | Generate DROP FK SQL (no execute)      |
+| POST   | `/api/relationship/execute`      | Execute pre-approved ALTER TABLE         |
+| POST   | `/api/report`                    | Generate data profiling report           |
+| POST   | `/api/execute-index`             | Execute a CREATE INDEX statement         |
+| GET    | `/api/health`                    | Health check                             |
 
 ---
 
@@ -99,22 +131,25 @@ Frontend runs at: http://localhost:5173
 ```
 db-graph-explorer/
 ├── backend/
-│   ├── main.py          # FastAPI app — all routes + introspection
+│   ├── main.py            # FastAPI app — routes, introspection, profiling engine
 │   └── requirements.txt
-└── frontend/
-    ├── src/
-    │   ├── App.jsx      # Full React app + Cytoscape integration
-    │   └── index.css    # Industrial Blueprint design system
-    ├── index.html
-    ├── package.json
-    └── vite.config.js   # Proxies /api → localhost:8000
+├── frontend/
+│   ├── App.jsx            # Full React app + Cytoscape + report page
+│   ├── index.css          # Industrial Blueprint design system
+│   ├── main.jsx           # Entry point with ErrorBoundary
+│   ├── index.html
+│   ├── package.json
+│   └── vite.config.js     # Proxies /api → localhost:8000
+└── .gitignore
 ```
 
 ---
 
 ## Safety Model
 
-- The execute endpoint **only accepts ALTER TABLE** statements
-- All identifiers are validated against `^[a-zA-Z0-9_]+$` regex
-- No DDL auto-runs — every change requires user confirmation
-- SQL is shown in full before execution
+- **ALTER TABLE** endpoint only accepts `ALTER TABLE` statements
+- **CREATE INDEX** endpoint only accepts `CREATE INDEX` / `CREATE UNIQUE INDEX`
+- All SQL identifiers validated against `^[a-zA-Z0-9_]+$` regex
+- No DDL auto-runs — every schema change requires user confirmation via SQL preview
+- Report profiling uses parameterized queries (no SQL injection)
+- Index recommendations generate safe, validated SQL
