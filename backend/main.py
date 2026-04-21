@@ -230,6 +230,10 @@ def build_graph(tables_rows, columns_rows, fk_rows, row_counts: Dict[str, int] =
     edge_set = set()
     fk_map: Dict[str, List] = {}
     degree_map: Dict[str, int] = {}
+    # parents_map[child] = [parent, ...] — tables child depends on (child has FK → parent)
+    parents_map: Dict[str, List[str]] = {}
+    # children_map[parent] = [child, ...] — tables that depend on parent
+    children_map: Dict[str, List[str]] = {}
 
     for fk in fk_rows:
         from_t = fk["from_table"]
@@ -257,6 +261,51 @@ def build_graph(tables_rows, columns_rows, fk_rows, row_counts: Dict[str, int] =
         degree_map[from_t] = degree_map.get(from_t, 0) + 1
         degree_map[to_t] = degree_map.get(to_t, 0) + 1
 
+        # track parent/child relationships
+        if from_t not in parents_map:
+            parents_map[from_t] = []
+        if to_t not in parents_map[from_t]:
+            parents_map[from_t].append(to_t)
+
+        if to_t not in children_map:
+            children_map[to_t] = []
+        if from_t not in children_map[to_t]:
+            children_map[to_t].append(from_t)
+
+    # ── Kahn's topological sort → layer per table ────────────────────────────
+    all_tables = [r["table_name"] for r in tables_rows]
+    tables_set = set(all_tables)
+
+    # in_degree = number of unique parents within the table set
+    in_degree: Dict[str, int] = {t: 0 for t in all_tables}
+    for child, parents in parents_map.items():
+        if child in tables_set:
+            in_degree[child] = len([p for p in parents if p in tables_set])
+
+    from collections import deque
+    queue = deque(t for t in all_tables if in_degree[t] == 0)
+    layer_map: Dict[str, int] = {}
+    current_layer = 0
+
+    while queue:
+        next_queue: deque = deque()
+        while queue:
+            node = queue.popleft()
+            layer_map[node] = current_layer
+            for child in children_map.get(node, []):
+                if child not in layer_map and child in tables_set:
+                    in_degree[child] -= 1
+                    if in_degree[child] == 0:
+                        next_queue.append(child)
+        current_layer += 1
+        queue = next_queue
+
+    # Nodes in cycles or unresolved are placed at the end
+    max_layer = current_layer
+    for t in all_tables:
+        if t not in layer_map:
+            layer_map[t] = max_layer
+
     nodes = []
     for row in tables_rows:
         tname = row["table_name"]
@@ -267,6 +316,9 @@ def build_graph(tables_rows, columns_rows, fk_rows, row_counts: Dict[str, int] =
             "degree": degree_map.get(tname, 0),
             "foreign_keys": fk_map.get(tname, []),
             "row_count": int(row_counts.get(tname, 0)),
+            "layer": layer_map.get(tname, 0),
+            "parents": sorted(parents_map.get(tname, [])),
+            "children": sorted(children_map.get(tname, [])),
         })
 
     return {"nodes": nodes, "edges": edges}

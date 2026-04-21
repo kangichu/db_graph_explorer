@@ -12,6 +12,12 @@ const API = ''  // uses Vite proxy
 const NODE_COLORS = { high: '#f0a500', normal: '#00d4ff', low: '#1e6a7a', isolated: '#3a5a6a' }
 const BORDER_COLORS = { high: '#c08000', normal: '#005870', low: '#005870', isolated: '#2a3a40' }
 
+// Layer View: 0=green, deeper layers shift toward red (up to layer 8+)
+const LAYER_COLORS = ['#2ecc71','#27ae91','#1a9fbf','#1e7abf','#2850bf','#7b42bf','#c0392b','#e74c3c','#ff6b6b']
+const LAYER_BORDER = ['#1a8a4a','#16705f','#0f7090','#0f5090','#1a38a0','#5a2a9a','#8a1a1a','#b03030','#cc4444']
+function layerColor(layer) { return LAYER_COLORS[Math.min(layer, LAYER_COLORS.length - 1)] }
+function layerBorder(layer) { return LAYER_BORDER[Math.min(layer, LAYER_BORDER.length - 1)] }
+
 // ─── Cytoscape style ─────────────────────────────────────────────────────
 
 const CY_STYLE = [
@@ -507,6 +513,9 @@ export default function App() {
   // Report
   const [reportLoading, setReportLoading] = useState(false)
 
+  // Layer View toggle
+  const [layerView, setLayerView] = useState(false)
+
   // Toast
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
@@ -718,13 +727,21 @@ export default function App() {
       ...schema.nodes.map(n => {
         const isPrimary = !hasPrimaryFlag || n.is_primary_match !== false
         const cat = getNodeCategory(n.degree)
+        const layer = n.layer ?? 0
+        const nodeColor = layerView
+          ? (isPrimary ? layerColor(layer) : '#1a2a35')
+          : (isPrimary ? NODE_COLORS[cat] : '#1a2a35')
+        const nodeBorder = layerView
+          ? (isPrimary ? layerBorder(layer) : '#2a3a40')
+          : (isPrimary ? BORDER_COLORS[cat] : '#2a3a40')
+        const nodeLabel = layerView ? `${n.label}\nL${layer}` : n.label
         return {
           data: {
             id: n.id,
-            label: n.label,
+            label: nodeLabel,
             degree: n.degree,
-            color: isPrimary ? NODE_COLORS[cat] : '#1a2a35',
-            borderColor: isPrimary ? BORDER_COLORS[cat] : '#2a3a40',
+            color: nodeColor,
+            borderColor: nodeBorder,
             size: isPrimary ? Math.max(60, Math.min(120, 60 + n.degree * 8)) : 50,
             nodeData: n,
             isPrimary,
@@ -794,7 +811,7 @@ export default function App() {
         showToast('Graph render failed: ' + err.message, 'error')
       }
     }
-  }, [schema])
+  }, [schema, layerView])
 
   // ─── Highlight helpers ────────────────────────────────────────────────
 
@@ -844,6 +861,7 @@ export default function App() {
   function fitAll() { cyInstance?.fit(undefined, 40) }
   function zoomIn() { cyInstance?.zoom({ level: (cyInstance.zoom() || 1) * 1.3, renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 } }) }
   function zoomOut() { cyInstance?.zoom({ level: (cyInstance.zoom() || 1) * 0.75, renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 } }) }
+  function toggleLayerView() { setLayerView(v => !v) }
   function relayout() {
     cyInstance?.layout({
       name: 'cola', animate: true, animationDuration: 600,
@@ -918,7 +936,13 @@ export default function App() {
 
   const allTableNodes = (fullSchemaRef.current?.nodes ?? schema?.nodes ?? [])
     .filter(n => !search || n.label.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => a.label.localeCompare(b.label))
+    .sort((a, b) => {
+      if (layerView) {
+        const ld = (a.layer ?? 0) - (b.layer ?? 0)
+        if (ld !== 0) return ld
+      }
+      return a.label.localeCompare(b.label)
+    })
 
   const filteredNodes = (schema?.nodes ?? []).filter(n => {
     if (search && !n.label.toLowerCase().includes(search.toLowerCase())) return false
@@ -1121,7 +1145,10 @@ export default function App() {
                     title={n.row_count > 0 ? `~${n.row_count.toLocaleString()} rows` : 'Empty table'}
                   />
                   <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{n.label}</span>
-                  <span className={`degree-badge ${n.degree >= highDegThreshold ? 'high' : n.degree === 0 ? 'isolated' : ''}`}>{n.degree}</span>
+                  {layerView
+                    ? <span className="degree-badge" style={{background:`${layerColor(n.layer??0)}22`,borderColor:layerColor(n.layer??0),color:layerColor(n.layer??0),minWidth:28}}>L{n.layer??0}</span>
+                    : <span className={`degree-badge ${n.degree >= highDegThreshold ? 'high' : n.degree === 0 ? 'isolated' : ''}`}>{n.degree}</span>
+                  }
                 </div>
               )
             })}
@@ -1155,6 +1182,17 @@ export default function App() {
             <button className="graph-ctrl-btn" title="Zoom Out" onClick={zoomOut}>−</button>
             <button className="graph-ctrl-btn" title="Fit All" onClick={fitAll} style={{fontSize:12}}>⊡</button>
             <button className="graph-ctrl-btn" title="Re-layout" onClick={relayout} style={{fontSize:12}}>↺</button>
+            <button
+              className="graph-ctrl-btn"
+              title={layerView ? 'Switch to Degree View' : 'Switch to Layer View (pump order)'}
+              onClick={toggleLayerView}
+              style={{
+                fontSize: 10,
+                background: layerView ? 'rgba(46,204,113,0.25)' : undefined,
+                borderColor: layerView ? '#2ecc71' : undefined,
+                color: layerView ? '#2ecc71' : undefined,
+              }}
+            >L{layerView ? '✓' : '?'}</button>
           </div>
         )}
 
@@ -1182,6 +1220,9 @@ export default function App() {
                 <span className={`meta-tag ${selectedNode.row_count > 0 ? '' : 'isolated'}`}>
                   {selectedNode.row_count > 0 ? `~${selectedNode.row_count.toLocaleString()} rows` : 'empty'}
                 </span>
+                <span className="meta-tag" style={{background: `${layerColor(selectedNode.layer ?? 0)}22`, borderColor: layerColor(selectedNode.layer ?? 0), color: layerColor(selectedNode.layer ?? 0)}}>
+                  Layer {selectedNode.layer ?? 0}
+                </span>
                 {selectedNode.degree >= highDegThreshold && <span className="meta-tag primary">HUB</span>}
                 {selectedNode.degree === 0 && <span className="meta-tag isolated">ISOLATED</span>}
               </div>
@@ -1204,32 +1245,78 @@ export default function App() {
                 </div>
               ))}
 
-              {selectedNode.foreign_keys?.length > 0 && (
+              {/* ── Depends On (pump these FIRST) ── */}
+              {(selectedNode.parents ?? []).length > 0 && (
                 <>
-                  <div className="detail-section-title">→ Foreign Keys</div>
-                  {selectedNode.foreign_keys.map((fk, i) => (
-                    <div className="fk-row" key={i} onClick={() => focusNode(fk.to_table)}>
-                      <span style={{color:'var(--text-secondary)'}}>{fk.from_column}</span>
-                      <span className="fk-arrow">→</span>
-                      <span className="fk-table">{fk.to_table}</span>
-                      <span className="fk-arrow">.</span>
-                      <span style={{color:'var(--text-secondary)'}}>{fk.to_column}</span>
-                    </div>
-                  ))}
+                  <div className="detail-section-title" style={{color:'#2ecc71'}}>⬆ Depends On — pump first ({(selectedNode.parents ?? []).length})</div>
+                  <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4,paddingLeft:4}}>
+                    This table's FKs point to these tables. They must have data before this table can be pumped.
+                  </div>
+                  {(selectedNode.parents ?? []).map((parentTable, i) => {
+                    const parentNode = (fullSchemaRef.current?.nodes ?? []).find(n => n.id === parentTable)
+                    return (
+                      <div className="fk-row" key={i} onClick={() => navigateToTable(parentTable)} style={{cursor:'pointer'}}>
+                        <span style={{color:'#2ecc71',fontSize:10,marginRight:4}}>L{parentNode?.layer ?? '?'}</span>
+                        <span className="fk-table">{parentTable}</span>
+                        {selectedNode.foreign_keys?.filter(fk => fk.to_table === parentTable).map((fk, j) => (
+                          <span key={j} style={{color:'var(--text-muted)',fontSize:10,marginLeft:'auto'}}>
+                            {fk.from_column}→{fk.to_column}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  })}
                 </>
               )}
 
-              {selectedNode.degree > 0 && schema.edges.filter(e => e.target === selectedNode.id).length > 0 && (
-                <>
-                  <div className="detail-section-title">← Referenced By</div>
-                  {schema.edges.filter(e => e.target === selectedNode.id).map((e, i) => (
-                    <div className="fk-row" key={i} onClick={() => focusNode(e.source)}>
-                      <span className="fk-table">{e.source}</span>
+              {/* ── Required By (tables that need this one first) ── */}
+              {(() => {
+                const allEdges = fullSchemaRef.current?.edges ?? schema?.edges ?? []
+                const requiredBy = allEdges.filter(e => e.target === selectedNode.id)
+                if (requiredBy.length === 0) return null
+                // Group by source table
+                const byTable = {}
+                for (const e of requiredBy) {
+                  if (!byTable[e.source]) byTable[e.source] = []
+                  byTable[e.source].push(e)
+                }
+                const sourceTables = Object.keys(byTable).sort()
+                return (
+                  <>
+                    <div className="detail-section-title" style={{color:'#f0a500'}}>⬇ Required By — pump after ({sourceTables.length})</div>
+                    <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4,paddingLeft:4}}>
+                      These tables have FKs pointing here. They can only be pumped after this table.
+                    </div>
+                    {sourceTables.map((srcTable, i) => {
+                      const srcNode = (fullSchemaRef.current?.nodes ?? []).find(n => n.id === srcTable)
+                      return (
+                        <div className="fk-row" key={i} onClick={() => navigateToTable(srcTable)} style={{cursor:'pointer'}}>
+                          <span style={{color:'#f0a500',fontSize:10,marginRight:4}}>L{srcNode?.layer ?? '?'}</span>
+                          <span className="fk-table">{srcTable}</span>
+                          <span style={{color:'var(--text-muted)',fontSize:10,marginLeft:'auto'}}>
+                            {byTable[srcTable].map(e => e.from_column).join(', ')}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </>
+                )
+              })()}
+
+              {/* ── Raw FK detail (collapse by default) ── */}
+              {selectedNode.foreign_keys?.length > 0 && (
+                <details style={{marginTop:6}}>
+                  <summary style={{fontSize:10,color:'var(--text-muted)',cursor:'pointer',userSelect:'none',listStyle:'none',paddingLeft:4}}>▸ FK constraint detail ({selectedNode.foreign_keys.length})</summary>
+                  {selectedNode.foreign_keys.map((fk, i) => (
+                    <div className="fk-row" key={i} onClick={() => navigateToTable(fk.to_table)} style={{cursor:'pointer'}}>
+                      <span style={{color:'var(--text-secondary)',fontSize:10}}>{fk.from_column}</span>
                       <span className="fk-arrow">→</span>
-                      <span style={{color:'var(--text-secondary)'}}>{e.from_column}</span>
+                      <span className="fk-table">{fk.to_table}</span>
+                      <span className="fk-arrow">.</span>
+                      <span style={{color:'var(--text-secondary)',fontSize:10}}>{fk.to_column}</span>
                     </div>
                   ))}
-                </>
+                </details>
               )}
             </div>
           </>
